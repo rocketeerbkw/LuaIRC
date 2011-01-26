@@ -5,37 +5,51 @@ module "irc"
 local meta = _META
 
 function meta:send(fmt, ...)
-	self.socket:send(fmt:format(...) .. "\r\n")
-end
+	local bytes, err = self.socket:send(fmt:format(...) .. "\r\n")
 
-local function sendByMethod(self, method, target, msg)
-	local toChannel = table.concat({method, target, ":"}, " ")
-	for line in msg:gmatch("[^\r\n]+") do
-		self.socket:send(table.concat{toChannel, line, "\r\n"})
+	if not bytes and err ~= "timeout" and err ~= "wantwrite" then
+		self:invoke("OnDisconnect", err, true)
+		self:shutdown()
+		error(err, errlevel)
 	end
 end
 
+local function verify(str, errLevel)
+	if str:find("^:") or str:find("%s%z") then
+		error(("malformed parameter '%s' to irc command"):format(str), errLevel)
+	end
+
+	return str
+end
+
 function meta:sendChat(target, msg)
-	sendByMethod(self, "PRIVMSG", target, msg)
+	-- Split the message into segments if it includes newlines.
+	for line in msg:gmatch("([^\r\n]+)") do
+		self:send("PRIVMSG %s :%s", verify(target, 3), line)
+	end
 end
 
 function meta:sendNotice(target, msg)
-	sendByMethod(self, "NOTICE", target, msg)
+	-- Split the message into segments if it includes newlines.
+	for line in msg:gmatch("([^\r\n]+)") do
+		self:send("NOTICE %s :%s", verify(target, 3), line)
+	end
 end
 
 function meta:join(channel, key)
 	if key then
-		self:send("JOIN %s :%s", channel, key)
+		self:send("JOIN %s :%s", verify(channel, 3), verify(key, 3))
 	else
-		self:send("JOIN %s", channel)
+		self:send("JOIN %s", verify(channel, 3))
 	end
 end
 
 function meta:part(channel)
+	channel = verify(channel, 3)
 	self:send("PART %s", channel)
-    if self.track_users then
+	if self.track_users then
 		self.channels[channel] = nil
-    end
+	end
 end
 
 function meta:trackUsers(b)
@@ -53,14 +67,14 @@ function meta:setMode(t)
 	local add, rem = t.add, t.remove
 
 	assert(add or rem, "table contains neither 'add' nor 'remove'")
-	
+
 	if add then
-		mode = table.concat{"+", add}
+		mode = table.concat{"+", verify(add, 3)}
 	end
 
 	if rem then
-		mode = table.concat{mode, "-", rem}
+		mode = table.concat{mode, "-", verify(rem, 3)}
 	end
-	
-	self:send("MODE %s %s", target, mode)
+
+	self:send("MODE %s %s", verify(target, 3), mode)
 end
